@@ -16,7 +16,7 @@ COPY prisma ./prisma
 RUN npx prisma generate
 
 # Copy the remaining source and compile.
-COPY tsconfig.json ./
+COPY tsconfig*.json ./
 COPY src ./src
 RUN npm run build
 
@@ -31,6 +31,9 @@ FROM node:22-alpine AS runtime
 
 WORKDIR /app
 
+# Prisma CLI/engines require OpenSSL on Alpine.
+RUN apk add --no-cache openssl
+
 # Install production dependencies only.
 COPY package*.json ./
 RUN npm ci --omit=dev --ignore-scripts
@@ -38,6 +41,8 @@ RUN npm ci --omit=dev --ignore-scripts
 # Copy the generated Prisma client and migration files.
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=builder /app/node_modules/@prisma/client ./node_modules/@prisma/client
+COPY --from=builder /app/node_modules/@prisma/engines ./node_modules/@prisma/engines
+COPY --from=builder /app/node_modules/prisma ./node_modules/prisma
 COPY prisma ./prisma
 
 # Copy the compiled JavaScript.
@@ -45,6 +50,7 @@ COPY --from=builder /app/dist ./dist
 
 # Run as a non-root user for security.
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+RUN chown -R appuser:appgroup /app
 USER appuser
 
 # The default command starts the API server.

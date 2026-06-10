@@ -1,129 +1,145 @@
 # colligo
 
-**colligo** is a lightweight RSS feed collection and delivery API server built with Node.js, TypeScript, Express, and Prisma. A background worker periodically fetches configured RSS feeds, deduplicates articles, and persists them to a relational database. A REST API exposes feeds and articles for downstream consumers.
+**colligo** は、Node.js / TypeScript / Express / Prisma で構築された軽量な RSS 収集・配信 API サーバーです。バックグラウンドワーカーが定期的に登録済み RSS フィードを取得し、記事を重複排除して RDB に保存します。REST API からはフィードと記事を参照できます。
 
 ---
 
-## Table of Contents
+## 目次
 
-1. [Overview](#overview)
-2. [Architecture](#architecture)
-3. [API Server Responsibilities](#api-server-responsibilities)
-4. [Worker Responsibilities](#worker-responsibilities)
-5. [Project Structure](#project-structure)
-6. [Environment Variables](#environment-variables)
-7. [Local Development Setup](#local-development-setup)
-8. [Docker Compose Usage](#docker-compose-usage)
-9. [API Reference](#api-reference)
-10. [Development Commands](#development-commands)
+- [colligo](#colligo)
+  - [目次](#目次)
+  - [概要](#概要)
+  - [アーキテクチャ](#アーキテクチャ)
+  - [API サーバーの責務](#api-サーバーの責務)
+  - [ワーカーの責務](#ワーカーの責務)
+  - [プロジェクト構成](#プロジェクト構成)
+  - [環境変数](#環境変数)
+    - [`.env` の例](#env-の例)
+  - [ローカル開発セットアップ](#ローカル開発セットアップ)
+    - [前提](#前提)
+    - [手順](#手順)
+  - [Docker Compose の使い方](#docker-compose-の使い方)
+    - [すべて起動](#すべて起動)
+    - [ログ確認](#ログ確認)
+    - [すべて停止](#すべて停止)
+    - [ボリュームも含めて削除](#ボリュームも含めて削除)
+    - [Docker 上でマイグレーション実行](#docker-上でマイグレーション実行)
+    - [サービス一覧](#サービス一覧)
+  - [Swagger / OpenAPI](#swagger--openapi)
+  - [API リファレンス](#api-リファレンス)
+    - [Health](#health)
+    - [Feeds](#feeds)
+    - [Articles](#articles)
+  - [開発コマンド](#開発コマンド)
+  - [ライセンス](#ライセンス)
 
 ---
 
-## Overview
+## 概要
 
-colligo solves the problem of aggregating multiple RSS feeds into a single, queryable store. It separates concerns cleanly:
+colligo は、複数の RSS フィードを 1 つの検索可能なストアに集約するためのアプリケーションです。責務を明確に分離しています。
 
-- **API process** — serves REST endpoints for managing feed subscriptions and reading collected articles.
-- **Worker process** — runs on a configurable interval, fetches each subscribed feed, parses entries, deduplicates by URL, and upserts new articles.
+- **API プロセス** — フィード購読管理と収集済み記事参照のための REST エンドポイントを提供
+- **Worker プロセス** — 設定間隔で起動し、購読中フィードを取得・解析し、URL ベースで重複排除して新規記事を upsert
 
-Both processes share the same Prisma database client and PostgreSQL instance, making the data immediately available to API consumers after each fetch cycle.
+両プロセスは同じ Prisma クライアントと PostgreSQL を共有するため、各フェッチサイクル後のデータを API クライアントが即時に参照できます。
 
 ---
 
-## Architecture
+## アーキテクチャ
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │  Docker Compose                                             │
 │                                                             │
 │  ┌──────────────┐   HTTP    ┌──────────────────────────┐   │
-│  │   API Server  │ ◄──────► │  External Clients /       │   │
-│  │  (Express +   │          │  Downstream Consumers     │   │
+│  │   API Server  │ ◄──────► │  外部クライアント /      │   │
+│  │  (Express +   │          │  下流コンシューマ         │   │
 │  │   Prisma)     │          └──────────────────────────┘   │
 │  └──────┬───────┘                                          │
-│         │  Prisma ORM (shared schema)                      │
+│         │  Prisma ORM（共有スキーマ）                      │
 │  ┌──────▼───────┐                                          │
 │  │  PostgreSQL   │                                          │
 │  │  Database     │                                          │
 │  └──────▲───────┘                                          │
 │         │  Prisma ORM                                      │
 │  ┌──────┴───────┐   HTTP    ┌──────────────────────────┐   │
-│  │  RSS Worker  │ ─────────►│  External RSS Feed URLs   │   │
+│  │  RSS Worker  │ ─────────►│  外部 RSS フィード URL    │   │
 │  │  (scheduler) │           └──────────────────────────┘   │
 │  └──────────────┘                                          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**Data flow:**
+**データフロー**
 
-1. An operator registers a feed URL via `POST /feeds`.
-2. The worker wakes on a configurable interval (default: every 60 minutes).
-3. For each active feed the worker fetches the RSS/Atom XML, parses entries, and skips any article whose URL already exists in the database.
-4. New articles are bulk-upserted with full metadata (title, URL, summary, published date).
-5. API clients poll `GET /feeds/:id/articles` or `GET /articles` to consume the latest collected items.
+1. オペレーターが `POST /feeds` でフィード URL を登録
+2. ワーカーが設定間隔（既定: 60 分）で起動
+3. 有効な各フィードの RSS/Atom XML を取得・解析し、DB に既存の URL はスキップ
+4. 新規記事をメタ情報（タイトル、URL、要約、公開日）付きで一括 upsert
+5. API クライアントが `GET /feeds/:id/articles` または `GET /articles` で最新記事を取得
 
 ---
 
-## API Server Responsibilities
+## API サーバーの責務
 
-The Express application (`src/api/`) handles:
+Express アプリケーション（`src/api/`）は以下を担当します。
 
-| Concern | Detail |
+| 項目 | 詳細 |
 |---|---|
-| **Feed CRUD** | Create, read, update, and delete feed subscriptions |
-| **Article listing** | Paginated article queries with optional feed and date filters |
-| **Health check** | `GET /health` returns `200 OK` for liveness probes |
-| **Input validation** | Request body and query-parameter validation with early error responses |
-| **Error handling** | Centralised middleware converts Prisma errors and validation errors to consistent JSON responses |
+| **Feed CRUD** | フィード購読の作成・参照・更新・削除 |
+| **記事一覧** | フィード/日付フィルタ付きのページネーション取得 |
+| **ヘルスチェック** | `GET /health` が `200 OK` を返す |
+| **入力検証** | リクエストボディ / クエリパラメータの検証 |
+| **エラーハンドリング** | Prisma エラーや検証エラーを統一 JSON で返却 |
 
-The API server does **not** perform any RSS fetching. It is purely a data-access layer on top of the database.
+API サーバーは **RSS 取得を実行しません**。DB に対するデータアクセス層です。
 
 ---
 
-## Worker Responsibilities
+## ワーカーの責務
 
-The worker (`src/worker/`) handles:
+ワーカー（`src/worker/`）は以下を担当します。
 
-| Concern | Detail |
+| 項目 | 詳細 |
 |---|---|
-| **Scheduler** | Runs a fetch cycle on a configurable interval using `node-cron` or `setInterval` |
-| **Feed discovery** | Queries the database for all feeds with `active = true` |
-| **RSS/Atom parsing** | Downloads feed XML and parses entries with `rss-parser` |
-| **Deduplication** | Checks each entry's URL against `processed_urls`; skips entries that already exist |
-| **Article upsert** | Bulk-inserts new articles; marks the feed's `lastFetchedAt` timestamp |
-| **Error isolation** | A failure in one feed does not stop processing of other feeds |
-| **Logging** | Structured JSON logs for each fetch cycle (feed URL, new count, skip count, errors) |
+| **スケジューラ** | `node-cron` または `setInterval` で定期実行 |
+| **フィード取得対象の抽出** | `active = true` のフィードを DB から取得 |
+| **RSS/Atom 解析** | `rss-parser` で XML を解析 |
+| **重複排除** | URL ベースで既存記事をスキップ |
+| **記事 upsert** | 新規記事を一括挿入し `lastFetchedAt` を更新 |
+| **障害分離** | 1 フィード失敗でも他フィード処理は継続 |
+| **ログ出力** | フィード URL / 追加件数 / スキップ件数 / エラーを構造化ログで記録 |
 
-The worker does **not** expose any HTTP endpoints. It runs as an independent long-lived process.
+ワーカーは HTTP エンドポイントを公開せず、独立した常駐プロセスとして動作します。
 
 ---
 
-## Project Structure
+## プロジェクト構成
 
-```
+```text
 colligo/
 ├── src/
 │   ├── api/
-│   │   ├── app.ts            # Express app bootstrap
+│   │   ├── app.ts            # Express アプリ起動
 │   │   ├── routes/
-│   │   │   ├── feeds.ts      # /feeds endpoints
-│   │   │   └── articles.ts   # /articles endpoints
+│   │   │   ├── feeds.ts      # /feeds エンドポイント
+│   │   │   └── articles.ts   # /articles エンドポイント
 │   │   └── middleware/
 │   │       └── errorHandler.ts
 │   ├── lib/
-│   │   ├── prisma.ts         # Prisma client singleton
-│   │   └── logger.ts         # Structured logger
+│   │   ├── prisma.ts         # Prisma クライアント singleton
+│   │   └── logger.ts         # 構造化ロガー
 │   ├── worker/
-│   │   ├── index.ts          # Worker entrypoint and scheduler
-│   │   ├── fetchFeeds.ts     # Fetch + parse feeds and persist articles
-│   │   └── rssParser.ts      # RSS/Atom normalisation helpers
+│   │   ├── index.ts          # ワーカー起点 + スケジューラ
+│   │   ├── fetchFeeds.ts     # 取得/解析/保存
+│   │   └── rssParser.ts      # RSS/Atom 正規化ヘルパー
 ├── prisma/
-│   ├── schema.prisma         # Data model (Feed, Article)
-│   └── migrations/           # Prisma migration history
-├── Dockerfile                # Multi-stage Node.js 22 image
+│   ├── schema.prisma         # データモデル（Feed, Article）
+│   └── migrations/           # Prisma マイグレーション履歴
+├── Dockerfile                # Node.js 22 マルチステージイメージ
 ├── .dockerignore
-├── docker-compose.yml        # Orchestrates api, worker, and db
-├── .env.example              # Template for required environment variables
+├── compose.yml               # api / worker / db のオーケストレーション
+├── .env.example              # 必須環境変数テンプレート
 ├── tsconfig.json
 ├── package.json
 └── README.md
@@ -131,148 +147,157 @@ colligo/
 
 ---
 
-## Environment Variables
+## 環境変数
 
-Copy `.env.example` to `.env` before running locally or via Docker Compose.
+ローカル実行または Docker Compose 実行前に `.env.example` を `.env` にコピーしてください。
 
 ```bash
 cp .env.example .env
 ```
 
-| Variable | Required | Default | Description |
+| 変数 | 必須 | 既定値 | 説明 |
 |---|---|---|---|
-| `DATABASE_URL` | ✅ | — | PostgreSQL connection string, e.g. `postgresql://user:pass@localhost:5432/colligo` |
-| `API_PORT` | | `3000` | Port the Express API server listens on |
-| `WORKER_INTERVAL_MINUTES` | | `60` | How often the worker runs a full fetch cycle (minutes) |
-| `WORKER_REQUEST_TIMEOUT_MS` | | `10000` | HTTP timeout per feed fetch (milliseconds) |
-| `LOG_LEVEL` | | `info` | Logging verbosity: `debug`, `info`, `warn`, `error` |
-| `NODE_ENV` | | `development` | Set to `production` in deployed environments |
+| `DATABASE_URL` | ✅ | — | PostgreSQL 接続文字列（例: `postgresql://user:pass@localhost:5432/colligo`） |
+| `PORT` |  | `3000` | Express API の待受ポート |
+| `FETCH_INTERVAL_MS` |  | `3600000` | ワーカー実行間隔（ミリ秒） |
+| `WORKER_CONCURRENCY` |  | `5` | ワーカー並列処理数 |
+| `NODE_ENV` |  | `development` | 本番では `production` |
 
-### Example `.env`
+### `.env` の例
 
 ```dotenv
 DATABASE_URL=postgresql://colligo:colligo@localhost:5432/colligo
-API_PORT=3000
-WORKER_INTERVAL_MINUTES=60
-WORKER_REQUEST_TIMEOUT_MS=10000
-LOG_LEVEL=info
+PORT=3000
+FETCH_INTERVAL_MS=3600000
+WORKER_CONCURRENCY=5
 NODE_ENV=development
 ```
 
 ---
 
-## Local Development Setup
+## ローカル開発セットアップ
 
-### Prerequisites
+### 前提
 
-- Node.js ≥ 22
-- pnpm ≥ 9 (or npm/yarn)
-- Docker Desktop (for PostgreSQL, or provide your own instance)
+- Node.js 22 以上
+- npm（または pnpm / yarn）
+- Docker Desktop（PostgreSQL をコンテナで使う場合）
 
-### Steps
+### 手順
 
 ```bash
-# 1. Clone and enter the repo
+# 1. リポジトリを取得して移動
 git clone <repo-url> colligo
 cd colligo
 
-# 2. Install dependencies
-pnpm install
+# 2. 依存関係をインストール
+npm ci
 
-# 3. Start a local PostgreSQL instance
+# 3. ローカル PostgreSQL を起動
 docker compose up -d db
 
-# 4. Configure environment
+# 4. 環境変数を設定
 cp .env.example .env
-# Edit .env and set DATABASE_URL if needed
+# 必要に応じて .env の DATABASE_URL を調整
 
-# 5. Run database migrations
-pnpm db:migrate
+# 5. マイグレーション適用
+npm run db:migrate
 
-# 6. Start the API server (hot-reload)
-pnpm dev:api
+# 6. API サーバー起動（ホットリロード）
+npm run dev
 
-# 7. Start the worker (in a separate terminal)
-pnpm dev:worker
+# 7. ワーカー起動（別ターミナル）
+npm run dev:worker
 ```
 
-The API will be available at `http://localhost:3000`.
+API は `http://localhost:3000` で利用できます。
 
 ---
 
-## Docker Compose Usage
+## Docker Compose の使い方
 
-The `docker-compose.yml` defines three services: `api`, `worker`, and `db`. Both application services share the same image built from the root `Dockerfile`.
+`compose.yml` では `api` / `worker` / `db` の 3 サービスを定義しています。`api` と `worker` は同じ `Dockerfile` からビルドされます。
 
-### Start all services
+### すべて起動
 
 ```bash
 docker compose up -d --build
 ```
 
-### View logs
+### ログ確認
 
 ```bash
-# All services
+# 全サービス
 docker compose logs -f
 
-# API only
+# API のみ
 docker compose logs -f api
 
-# Worker only
+# Worker のみ
 docker compose logs -f worker
 ```
 
-### Stop all services
+### すべて停止
 
 ```bash
 docker compose down
 ```
 
-### Destroy everything including volumes
+### ボリュームも含めて削除
 
 ```bash
 docker compose down -v
 ```
 
-### Run migrations in Docker
+### Docker 上でマイグレーション実行
 
 ```bash
-docker compose run --rm api pnpm db:migrate:deploy
+docker compose run --rm api npm run db:migrate:deploy
 ```
 
-### Service summary
+### サービス一覧
 
-| Service | Port | Description |
+| サービス | ポート | 説明 |
 |---|---|---|
 | `api` | `3000` | Express REST API |
-| `worker` | — | Background RSS fetch worker (no exposed port) |
-| `db` | `5432` | PostgreSQL 16 database |
+| `worker` | — | バックグラウンド RSS 取得ワーカー（ポート公開なし） |
+| `db` | `5432` | PostgreSQL 16 |
 
 ---
 
-## API Reference
+## Swagger / OpenAPI
 
-All responses are `application/json`. Error responses follow the shape `{ "error": "message" }`.
+API サーバー起動後、以下で仕様を確認できます。
+
+- Swagger UI: `http://localhost:3000/docs`
+- OpenAPI JSON: `http://localhost:3000/openapi.json`
+
+Docker Compose 利用時も同じ URL です（`api` サービスの `3000` 公開ポート）。
+
+---
+
+## API リファレンス
+
+レスポンスはすべて `application/json` です。エラー形式は `{ "error": "message" }` を想定しています。
 
 ### Health
 
-```
+```text
 GET /health
 → 200 { "status": "ok" }
 ```
 
 ### Feeds
 
-| Method | Path | Description |
+| Method | Path | 説明 |
 |---|---|---|
-| `GET` | `/feeds` | List all registered feeds |
-| `POST` | `/feeds` | Register a new feed |
-| `GET` | `/feeds/:id` | Get a single feed by ID |
-| `PATCH` | `/feeds/:id` | Update feed properties (e.g. `active`, `name`) |
-| `DELETE` | `/feeds/:id` | Delete a feed and its articles |
+| `GET` | `/feeds` | 登録済みフィード一覧 |
+| `POST` | `/feeds` | 新規フィード登録 |
+| `GET` | `/feeds/:id` | 指定 ID のフィード取得 |
+| `PATCH` | `/feeds/:id` | フィード属性更新（`active`, `name` など） |
+| `DELETE` | `/feeds/:id` | フィードと関連記事を削除 |
 
-**Register a feed — request body:**
+**フィード登録リクエスト例**
 
 ```json
 {
@@ -284,39 +309,39 @@ GET /health
 
 ### Articles
 
-| Method | Path | Description |
+| Method | Path | 説明 |
 |---|---|---|
-| `GET` | `/articles` | List all articles (paginated) |
-| `GET` | `/feeds/:id/articles` | List articles for a specific feed |
-| `GET` | `/articles/:id` | Get a single article by ID |
+| `GET` | `/articles` | 記事一覧（ページネーション） |
+| `GET` | `/feeds/:id/articles` | 指定フィードの記事一覧 |
+| `GET` | `/articles/:id` | 指定 ID の記事取得 |
 
-**Query parameters for list endpoints:**
+**一覧取得クエリパラメータ**
 
-| Parameter | Type | Description |
+| パラメータ | 型 | 説明 |
 |---|---|---|
-| `page` | integer | Page number (default: `1`) |
-| `limit` | integer | Items per page (default: `20`, max: `100`) |
-| `since` | ISO 8601 | Return articles published after this timestamp |
+| `page` | integer | ページ番号（既定: `1`） |
+| `limit` | integer | 1 ページ件数（既定: `20`, 最大: `100`） |
+| `since` | ISO 8601 | 指定時刻以降に公開された記事のみ |
 
 ---
 
-## Development Commands
+## 開発コマンド
 
-| Command | Description |
+| コマンド | 説明 |
 |---|---|
-| `pnpm dev:api` | Start API in watch mode (tsx watch) |
-| `pnpm dev:worker` | Start worker in watch mode |
-| `pnpm build` | Compile TypeScript to `dist/` |
-| `pnpm start:api` | Run compiled API server |
-| `pnpm start:worker` | Run compiled worker |
-| `pnpm db:migrate` | Apply pending Prisma migrations |
-| `pnpm db:migrate:deploy` | Apply migrations in non-interactive environments |
-| `pnpm db:generate` | Regenerate Prisma client after schema changes |
-| `pnpm db:studio` | Open Prisma Studio (browser-based DB UI) |
-| `pnpm db:reset` | Drop and recreate the database (dev only) |
+| `npm run dev` | API を watch モードで起動（tsx watch） |
+| `npm run dev:worker` | Worker を watch モードで起動 |
+| `npm run build` | TypeScript を `dist/` にビルド |
+| `npm run start:api` | ビルド済み API を起動 |
+| `npm run start:worker` | ビルド済み Worker を起動 |
+| `npm run db:migrate` | 保留中の Prisma マイグレーションを適用 |
+| `npm run db:migrate:deploy` | 非対話環境向けにマイグレーション適用 |
+| `npm run db:generate` | スキーマ変更後に Prisma Client 再生成 |
+| `npm run db:studio` | Prisma Studio を起動（ブラウザ UI） |
+| `npm run db:reset` | DB を再作成（開発専用） |
 
 ---
 
-## License
+## ライセンス
 
 MIT

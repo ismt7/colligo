@@ -30,7 +30,7 @@ services:
       context: .
       dockerfile: Dockerfile
     command: >
-      sh -c "npx prisma migrate deploy && node dist/api/index.js"
+      sh -c "node node_modules/prisma/build/index.js migrate deploy && node dist/api/index.js"
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-colligo}
