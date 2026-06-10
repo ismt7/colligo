@@ -1,0 +1,46 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Feed {
+  id        Int       @id @default(autoincrement())
+  url       String    @unique
+  name      String
+  /// When false the worker skips this feed entirely
+  active        Boolean   @default(true)
+  lastFetchedAt DateTime? @map("last_fetched_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  articles Article[]
+
+  @@map("feeds")
+}
+
+model Article {
+  id          Int       @id @default(autoincrement())
+  feedId      Int       @map("feed_id")
+  title       String
+  url         String    @unique
+  /// Raw GUID / id from the RSS/Atom item; used for per-feed deduplication
+  guid        String?
+  content     String?
+  publishedAt DateTime? @map("published_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  feed Feed @relation(fields: [feedId], references: [id], onDelete: Cascade)
+
+  @@unique([feedId, guid])
+  @@index([feedId])
+  @@index([publishedAt(sort: Desc)])
+  @@map("articles")
+}
