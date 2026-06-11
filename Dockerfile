@@ -7,6 +7,9 @@ FROM node:22-alpine AS builder
 
 WORKDIR /app
 
+# Ensure Prisma detects OpenSSL 3 on Alpine during client generation.
+RUN apk add --no-cache openssl
+
 # Copy manifests first to exploit layer caching on dependency installs.
 COPY package*.json ./
 RUN npm ci --ignore-scripts
