@@ -306,6 +306,13 @@ const openApiDefinition = {
             required: false,
             schema: { type: "string", format: "date-time" },
           },
+          {
+            name: "sort",
+            in: "query",
+            required: false,
+            description: "Sort order for publishedAt (default: desc)",
+            schema: { type: "string", enum: ["asc", "desc"], default: "desc" },
+          },
         ],
         responses: {
           "200": {
@@ -363,6 +370,13 @@ const openApiDefinition = {
             in: "query",
             required: false,
             schema: { type: "string", format: "date-time" },
+          },
+          {
+            name: "sort",
+            in: "query",
+            required: false,
+            description: "Sort order for publishedAt (default: desc)",
+            schema: { type: "string", enum: ["asc", "desc"], default: "desc" },
           },
         ],
         responses: {

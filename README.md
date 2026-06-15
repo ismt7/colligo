@@ -161,6 +161,10 @@ cp .env.example .env
 | `PORT` |  | `3000` | Express API の待受ポート |
 | `FETCH_INTERVAL_MS` |  | `3600000` | ワーカー実行間隔（ミリ秒） |
 | `WORKER_CONCURRENCY` |  | `5` | ワーカー並列処理数 |
+| `WORKER_ACTIVE_HOURS_ENABLED` |  | `true` | `true` の場合のみ実行時間帯を制限 |
+| `WORKER_ACTIVE_HOURS_START` |  | `9` | 実行許可開始時刻（0-23, 含む） |
+| `WORKER_ACTIVE_HOURS_END` |  | `18` | 実行許可終了時刻（0-23, 含まない） |
+| `WORKER_ACTIVE_HOURS_TZ` |  | `Asia/Tokyo` | 実行時間帯判定に使うタイムゾーン（IANA） |
 | `NODE_ENV` |  | `development` | 本番では `production` |
 
 ### `.env` の例
@@ -170,6 +174,10 @@ DATABASE_URL=postgresql://colligo:colligo@localhost:5432/colligo
 PORT=3000
 FETCH_INTERVAL_MS=3600000
 WORKER_CONCURRENCY=5
+WORKER_ACTIVE_HOURS_ENABLED=true
+WORKER_ACTIVE_HOURS_START=9
+WORKER_ACTIVE_HOURS_END=18
+WORKER_ACTIVE_HOURS_TZ=Asia/Tokyo
 NODE_ENV=development
 ```
 

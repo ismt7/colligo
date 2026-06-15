@@ -27,6 +27,14 @@ const envSchema = z.object({
   FETCH_INTERVAL_MS: z.coerce.number().int().positive().default(3_600_000),
   /** Max feeds fetched in parallel per cycle. */
   WORKER_CONCURRENCY: z.coerce.number().int().positive().default(5),
+  /** Restrict worker execution to a daytime window. */
+  WORKER_ACTIVE_HOURS_ENABLED: z.coerce.boolean().default(true),
+  /** Start hour (inclusive), 0-23. */
+  WORKER_ACTIVE_HOURS_START: z.coerce.number().int().min(0).max(23).default(9),
+  /** End hour (exclusive), 0-23. */
+  WORKER_ACTIVE_HOURS_END: z.coerce.number().int().min(0).max(23).default(18),
+  /** IANA timezone used for active-hours checks. */
+  WORKER_ACTIVE_HOURS_TZ: z.string().min(1).default("Asia/Tokyo"),
 
   // ── Logging ────────────────────────────────────────────────────────────────
   LOG_LEVEL: z.enum(["error", "warn", "info", "http", "debug", "silly"]).default("info"),

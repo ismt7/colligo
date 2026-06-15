@@ -14,6 +14,7 @@ const MAX_PAGE_SIZE = 100;
  *   page    – 1-based page number (default 1)
  *   limit   – page size (default 20, max 100)
  *   since   – ISO 8601 timestamp; return only articles published after this date
+ *   sort    – sort order for publishedAt: "desc" (default) or "asc"
  */
 export async function listArticles(
   req: Request<{ feedId?: string }>,
@@ -50,6 +51,12 @@ export async function listArticles(
       throw new HttpError(400, "since must be a valid ISO 8601 date");
     }
 
+    const sortParam = (req.query.sort as string | undefined) ?? "desc";
+    if (sortParam !== "asc" && sortParam !== "desc") {
+      throw new HttpError(400, 'sort must be "asc" or "desc"');
+    }
+    const sortOrder: "asc" | "desc" = sortParam;
+
     const where = {
       ...(feedId !== undefined ? { feedId } : {}),
       ...(sinceDate !== undefined ? { publishedAt: { gt: sinceDate } } : {}),
@@ -59,7 +66,7 @@ export async function listArticles(
       prisma.article.count({ where }),
       prisma.article.findMany({
         where,
-        orderBy: { publishedAt: "desc" },
+        orderBy: { publishedAt: sortOrder },
         skip,
         take: limit,
         include: {
