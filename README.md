@@ -31,6 +31,12 @@
     - [Feeds](#feeds)
     - [Articles](#articles)
   - [開発コマンド](#開発コマンド)
+  - [データ移行](#データ移行)
+    - [概要](#概要-1)
+    - [移行の流れ（簡易版）](#移行の流れ簡易版)
+    - [詳細な手順](#詳細な手順)
+    - [スクリプトの使用方法](#スクリプトの使用方法)
+    - [環境変数の設定](#環境変数の設定)
   - [ライセンス](#ライセンス)
 
 ---
@@ -347,6 +353,112 @@ GET /health
 | `npm run db:generate` | スキーマ変更後に Prisma Client 再生成 |
 | `npm run db:studio` | Prisma Studio を起動（ブラウザ UI） |
 | `npm run db:reset` | DB を再作成（開発専用） |
+
+---
+
+## データ移行
+
+サーバーを別の環境に引っ越しする際のデータ移行を自動化するスクリプトと手順書を提供しています。
+
+### 概要
+
+colligo のデータ移行仕組みは以下で構成されます：
+
+- **手順書** (`docs/MIGRATION.md`) — 詳細な移行ステップ
+- **エクスポートスクリプト** (`scripts/export-data.sh`) — 旧環境からのバックアップ
+- **インポートスクリプト** (`scripts/import-data.sh`) — 新環境への復元
+- **検証スクリプト** (`scripts/validate-data.sh`) — データ整合性確認
+- **環境設定テンプレート** (`.env.migration.template`) — 環境別設定ガイド
+
+### 移行の流れ（簡易版）
+
+```bash
+# 旧環境でのエクスポート
+cd /path/to/colligo
+docker compose up -d db
+./scripts/export-data.sh --format sql --output backup.sql
+
+# ダンプファイルを新環境に転送
+scp backup.sql user@new-server:/path/to/colligo/
+
+# 新環境でのインポート
+cd /path/to/colligo
+docker compose up -d db
+./scripts/import-data.sh --input backup.sql
+
+# データの検証
+./scripts/validate-data.sh
+
+# サービスを起動
+docker compose up -d api worker
+```
+
+### 詳細な手順
+
+完全な移行ガイドは [docs/MIGRATION.md](docs/MIGRATION.md) を参照してください。以下の項目をカバーしています：
+
+- **前提条件** — 必要な環境
+- **エクスポート方法** — SQL 形式 vs カスタム形式
+- **インポート方法** — スキーマ初期化からデータ復元まで
+- **データ検証** — 整合性チェック方法
+- **トラブルシューティング** — よくあるエラーと対処法
+- **ロールバック手順** — 失敗時の復旧方法
+
+### スクリプトの使用方法
+
+#### export-data.sh
+
+旧環境からデータベースをエクスポートします。
+
+```bash
+# SQL 形式でバックアップ
+./scripts/export-data.sh --format sql
+
+# カスタム形式で圧縮バックアップ
+./scripts/export-data.sh --format custom --output backup.dump
+
+# 詳細ログを表示
+./scripts/export-data.sh --verbose
+```
+
+#### import-data.sh
+
+新環境にデータをインポートします。
+
+```bash
+# スキーマ初期化から完全復元
+./scripts/import-data.sh --input backup.sql
+
+# スキーマ初期化をスキップ
+./scripts/import-data.sh --input backup.sql --skip-schema
+
+# テーブルをクリアしてから復元
+./scripts/import-data.sh --input backup.sql --truncate
+```
+
+#### validate-data.sh
+
+移行後のデータ整合性を検証します。
+
+```bash
+# 基本検証（テーブル構造、制約、参照整合性）
+./scripts/validate-data.sh
+
+# 詳細検証（行レベルの確認）
+./scripts/validate-data.sh --detailed
+
+# 旧環境の統計と比較
+./scripts/validate-data.sh --compare-with old_stats.json
+```
+
+### 環境変数の設定
+
+移行時の環境変数設定については、`.env.migration.template` を参照してください。
+
+```bash
+cp .env.migration.template .env.migration
+# .env.migration を編集して両環境に配置
+```
 
 ---
 
