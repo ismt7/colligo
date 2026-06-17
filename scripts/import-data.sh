@@ -131,6 +131,22 @@ if [[ ! -s "$INPUT_FILE" ]]; then
   exit 1
 fi
 
+# ダンプ形式と内容を事前判定
+DUMP_IS_CUSTOM=false
+SQL_HAS_SCHEMA=false
+SQL_COPY_COUNT=0
+SQL_INSERT_COUNT=0
+
+if file "$INPUT_FILE" | grep -q "PostgreSQL custom database dump"; then
+  DUMP_IS_CUSTOM=true
+else
+  SQL_COPY_COUNT=$(grep -c '^COPY ' "$INPUT_FILE" || true)
+  SQL_INSERT_COUNT=$(grep -c '^INSERT INTO ' "$INPUT_FILE" || true)
+  if grep -q '^CREATE TABLE ' "$INPUT_FILE" || grep -q '^CREATE SEQUENCE ' "$INPUT_FILE"; then
+    SQL_HAS_SCHEMA=true
+  fi
+fi
+
 # ファイルサイズをチェック
 FILE_SIZE=$(stat -f%z "$INPUT_FILE" 2>/dev/null || stat -c%s "$INPUT_FILE" 2>/dev/null)
 if [[ $FILE_SIZE -lt 1024 ]]; then
@@ -201,7 +217,7 @@ log_success "DB に接続できました"
 # スキーマ初期化
 # ============================================================================
 
-if [[ "$SKIP_SCHEMA" == "false" ]]; then
+if [[ "$SKIP_SCHEMA" == "false" && "$SQL_HAS_SCHEMA" == "false" ]]; then
   log ""
   log "=== スキーマ初期化 ==="
   log "Prisma マイグレーション実行中..."
@@ -228,6 +244,10 @@ if [[ "$SKIP_SCHEMA" == "false" ]]; then
   fi
 
   log_success "スキーマ初期化完了"
+elif [[ "$SQL_HAS_SCHEMA" == "true" ]]; then
+  log ""
+  log "=== スキーマ初期化 ==="
+  log "SQL ダンプにスキーマ定義が含まれているため、Prisma マイグレーションをスキップします"
 else
   log "スキーマ初期化をスキップしました"
 fi
@@ -265,7 +285,7 @@ log ""
 START_TIME=$(date +%s)
 
 # ダンプファイルの形式を判定
-if file "$INPUT_FILE" | grep -q "PostgreSQL custom database dump"; then
+if [[ "$DUMP_IS_CUSTOM" == "true" ]]; then
   # カスタム形式
   log "ダンプ形式: PostgreSQL カスタム形式（圧縮）"
 
@@ -292,12 +312,21 @@ if file "$INPUT_FILE" | grep -q "PostgreSQL custom database dump"; then
 else
   # SQL 形式（プレーンテキスト）
   log "ダンプ形式: SQL テキスト"
-
-  SQL_COPY_COUNT=$(grep -c '^COPY ' "$INPUT_FILE" || true)
-  SQL_INSERT_COUNT=$(grep -c '^INSERT INTO ' "$INPUT_FILE" || true)
   log "SQL 内データ文: COPY=$SQL_COPY_COUNT, INSERT=$SQL_INSERT_COUNT"
   if [[ $SQL_COPY_COUNT -eq 0 && $SQL_INSERT_COUNT -eq 0 ]]; then
     log_warning "SQL にデータ文が見つかりません（スキーマのみダンプの可能性）"
+  fi
+
+  if [[ "$SQL_HAS_SCHEMA" == "true" ]]; then
+    log "SQL にスキーマ定義が含まれるため、既存 public スキーマを初期化します"
+    docker exec "$DB_CONTAINER" \
+      psql -U "$POSTGRES_USER" \
+      -d "$POSTGRES_DB" \
+      -v ON_ERROR_STOP=1 \
+      -c "DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;" || {
+      log_error "public スキーマの初期化に失敗しました"
+      exit 1
+    }
   fi
 
   docker exec -i "$DB_CONTAINER" \
@@ -309,7 +338,7 @@ else
     log ""
     log "トラブルシューティング:"
     log "  1. 外部キー制約エラーの場合は、--truncate オプションを使用してください"
-    log "  2. スキーマが既に存在する場合は、--skip-schema オプションを使用してください"
+    log "  2. SQL にスキーマ定義がある場合、既存DBにテーブルが残っていないか確認してください"
     exit 1
   }
 fi
