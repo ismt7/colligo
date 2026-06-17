@@ -6,11 +6,12 @@
  * that malformed feeds still produce usable records.
  */
 import Parser from "rss-parser";
+import { WORKER_USER_AGENT } from "./robots";
 
 // rss-parser is a CommonJS module; the cast keeps TypeScript happy.
 const parser = new Parser({
   timeout: 10_000, // 10 s per HTTP request
-  headers: { "User-Agent": "Colligo RSS Worker/1.0" },
+  headers: { "User-Agent": WORKER_USER_AGENT },
 });
 
 export interface ParsedItem {

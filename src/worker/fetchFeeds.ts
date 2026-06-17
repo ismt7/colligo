@@ -12,6 +12,7 @@
  */
 
 import prisma from "../lib/prisma";
+import { checkRobotsAndWait } from "./robots";
 import { parseFeed } from "./rssParser";
 
 interface FeedResult {
@@ -20,6 +21,7 @@ interface FeedResult {
   inserted: number;
   skipped: number;
   error: string | null;
+  blockedReason: string | null;
 }
 
 /**
@@ -28,6 +30,18 @@ interface FeedResult {
  */
 async function processFeed(feedId: number, feedUrl: string, feedName: string): Promise<FeedResult> {
   try {
+    const robots = await checkRobotsAndWait(feedUrl);
+    if (!robots.allowed) {
+      return {
+        feedId,
+        feedUrl,
+        inserted: 0,
+        skipped: 0,
+        error: null,
+        blockedReason: robots.reason,
+      };
+    }
+
     const parsed = await parseFeed(feedUrl);
 
     // Back-fill the feed name from the RSS <title> if it was never set.
@@ -43,7 +57,7 @@ async function processFeed(feedId: number, feedUrl: string, feedName: string): P
         where: { id: feedId },
         data: { lastFetchedAt: new Date() },
       });
-      return { feedId, feedUrl, inserted: 0, skipped: 0, error: null };
+      return { feedId, feedUrl, inserted: 0, skipped: 0, error: null, blockedReason: null };
     }
 
     // Filter out items without a usable URL (they would fail the NOT NULL / unique check).
@@ -73,10 +87,11 @@ async function processFeed(feedId: number, feedUrl: string, feedName: string): P
       inserted: result.count,
       skipped: skippedMissing + (validItems.length - result.count),
       error: null,
+      blockedReason: null,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return { feedId, feedUrl, inserted: 0, skipped: 0, error: message };
+    return { feedId, feedUrl, inserted: 0, skipped: 0, error: message, blockedReason: null };
   }
 }
 
@@ -101,13 +116,19 @@ export async function fetchAllFeeds(): Promise<void> {
   let totalInserted = 0;
   let totalSkipped = 0;
   let totalErrors = 0;
+  let totalBlocked = 0;
 
   for (let i = 0; i < feeds.length; i += concurrency) {
     const batch = feeds.slice(i, i + concurrency);
     const results = await Promise.all(batch.map((f) => processFeed(f.id, f.url, f.name)));
 
     for (const r of results) {
-      if (r.error) {
+      if (r.blockedReason) {
+        console.log(
+          `[worker] - feed ${r.feedId} (${r.feedUrl}): blocked by robots.txt (${r.blockedReason})`
+        );
+        totalBlocked += 1;
+      } else if (r.error) {
         console.error(`[worker] ✗ feed ${r.feedId} (${r.feedUrl}): ${r.error}`);
         totalErrors += 1;
       } else {
@@ -122,6 +143,6 @@ export async function fetchAllFeeds(): Promise<void> {
   }
 
   console.log(
-    `[worker] Cycle complete — inserted: ${totalInserted}, skipped: ${totalSkipped}, errors: ${totalErrors}`
+    `[worker] Cycle complete — inserted: ${totalInserted}, skipped: ${totalSkipped}, blocked: ${totalBlocked}, errors: ${totalErrors}`
   );
 }
