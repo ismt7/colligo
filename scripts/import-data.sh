@@ -293,9 +293,17 @@ else
   # SQL 形式（プレーンテキスト）
   log "ダンプ形式: SQL テキスト"
 
-  docker exec "$DB_CONTAINER" \
+  SQL_COPY_COUNT=$(grep -c '^COPY ' "$INPUT_FILE" || true)
+  SQL_INSERT_COUNT=$(grep -c '^INSERT INTO ' "$INPUT_FILE" || true)
+  log "SQL 内データ文: COPY=$SQL_COPY_COUNT, INSERT=$SQL_INSERT_COUNT"
+  if [[ $SQL_COPY_COUNT -eq 0 && $SQL_INSERT_COUNT -eq 0 ]]; then
+    log_warning "SQL にデータ文が見つかりません（スキーマのみダンプの可能性）"
+  fi
+
+  docker exec -i "$DB_CONTAINER" \
     psql -U "$POSTGRES_USER" \
     -d "$POSTGRES_DB" \
+    -v ON_ERROR_STOP=1 \
     < "$INPUT_FILE" || {
     log_error "psql に失敗しました"
     log ""
