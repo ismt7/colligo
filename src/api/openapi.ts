@@ -313,6 +313,13 @@ const openApiDefinition = {
             description: "Sort order for publishedAt (default: desc)",
             schema: { type: "string", enum: ["asc", "desc"], default: "desc" },
           },
+          {
+            name: "balance",
+            in: "query",
+            required: false,
+            description: "Optional cross-feed balancing mode for /articles results",
+            schema: { type: "string", enum: ["weighted"] },
+          },
         ],
         responses: {
           "200": {

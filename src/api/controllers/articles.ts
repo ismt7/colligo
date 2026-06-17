@@ -1,9 +1,53 @@
+import { Prisma } from "@prisma/client";
 import { Request, Response, NextFunction } from "express";
 import prisma from "../../lib/prisma";
 import { HttpError } from "../middleware/errorHandler";
 
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 100;
+const BALANCE_MODE_WEIGHTED = "weighted";
+
+type ArticleSortOrder = "asc" | "desc";
+
+type BalancedArticleIdRow = {
+  id: number;
+};
+
+function buildBalancedArticlesQuery(
+  sortOrder: ArticleSortOrder,
+  limit: number,
+  skip: number,
+  feedId?: number,
+  sinceDate?: Date
+): Prisma.Sql {
+  const sortDirection = Prisma.raw(sortOrder.toUpperCase());
+  const idDirection = Prisma.raw(sortOrder === "asc" ? "ASC" : "DESC");
+
+  return Prisma.sql`
+    WITH filtered_articles AS (
+      SELECT a.id, a.feed_id, a.published_at
+      FROM articles a
+      WHERE 1 = 1
+      ${feedId !== undefined ? Prisma.sql`AND a.feed_id = ${feedId}` : Prisma.empty}
+      ${sinceDate !== undefined ? Prisma.sql`AND a.published_at > ${sinceDate}` : Prisma.empty}
+    ),
+    ranked_articles AS (
+      SELECT
+        fa.id,
+        fa.published_at,
+        ROW_NUMBER() OVER (
+          PARTITION BY fa.feed_id
+          ORDER BY fa.published_at ${sortDirection} NULLS LAST, fa.id ${idDirection}
+        ) AS feed_rank
+      FROM filtered_articles fa
+    )
+    SELECT ra.id
+    FROM ranked_articles ra
+    ORDER BY ra.feed_rank ASC, ra.published_at ${sortDirection} NULLS LAST, ra.id ${idDirection}
+    OFFSET ${skip}
+    LIMIT ${limit}
+  `;
+}
 
 /**
  * GET /articles
@@ -15,6 +59,7 @@ const MAX_PAGE_SIZE = 100;
  *   limit   – page size (default 20, max 100)
  *   since   – ISO 8601 timestamp; return only articles published after this date
  *   sort    – sort order for publishedAt: "desc" (default) or "asc"
+ *   balance – optional mode for reducing feed skew across /articles results
  */
 export async function listArticles(
   req: Request<{ feedId?: string }>,
@@ -55,25 +100,55 @@ export async function listArticles(
     if (sortParam !== "asc" && sortParam !== "desc") {
       throw new HttpError(400, 'sort must be "asc" or "desc"');
     }
-    const sortOrder: "asc" | "desc" = sortParam;
+    const sortOrder: ArticleSortOrder = sortParam;
+
+    const balanceParam = req.query.balance as string | undefined;
+    if (balanceParam !== undefined && balanceParam !== BALANCE_MODE_WEIGHTED) {
+      throw new HttpError(400, 'balance must be "weighted"');
+    }
+    const useBalancedOrdering = balanceParam === BALANCE_MODE_WEIGHTED && feedId === undefined;
 
     const where = {
       ...(feedId !== undefined ? { feedId } : {}),
       ...(sinceDate !== undefined ? { publishedAt: { gt: sinceDate } } : {}),
     };
 
-    const [total, articles] = await prisma.$transaction([
-      prisma.article.count({ where }),
-      prisma.article.findMany({
-        where,
-        orderBy: { publishedAt: sortOrder },
-        skip,
-        take: limit,
-        include: {
-          feed: { select: { id: true, name: true, url: true } },
-        },
-      }),
-    ]);
+    const [total, articles] = useBalancedOrdering
+      ? await prisma.$transaction(async (tx) => {
+          const totalCount = await tx.article.count({ where });
+          const articleIds = await tx.$queryRaw<BalancedArticleIdRow[]>(
+            buildBalancedArticlesQuery(sortOrder, limit, skip, undefined, sinceDate)
+          );
+
+          if (articleIds.length === 0) {
+            return [totalCount, []] as const;
+          }
+
+          const articlesById = await tx.article.findMany({
+            where: { id: { in: articleIds.map((article) => article.id) } },
+            include: {
+              feed: { select: { id: true, name: true, url: true } },
+            },
+          });
+
+          const orderedArticles = articleIds
+            .map((article) => articlesById.find((candidate) => candidate.id === article.id))
+            .filter((article): article is (typeof articlesById)[number] => article !== undefined);
+
+          return [totalCount, orderedArticles] as const;
+        })
+      : await prisma.$transaction([
+          prisma.article.count({ where }),
+          prisma.article.findMany({
+            where,
+            orderBy: [{ publishedAt: sortOrder }, { id: sortOrder }],
+            skip,
+            take: limit,
+            include: {
+              feed: { select: { id: true, name: true, url: true } },
+            },
+          }),
+        ]);
 
     res.json({
       data: articles,

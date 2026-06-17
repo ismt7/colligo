@@ -17,6 +17,19 @@ export interface PaginationQuery {
   limit?: number;
 }
 
+export type ArticleBalanceMode = "weighted";
+
+export interface ArticlesQuery extends PaginationQuery {
+  /** Feed ID filter for the top-level /articles endpoint. */
+  feedId?: number;
+  /** Return only articles published after this date. */
+  since?: string;
+  /** Sort order for publishedAt. */
+  sort?: "asc" | "desc";
+  /** Optional balance mode for cross-feed article listings. */
+  balance?: ArticleBalanceMode;
+}
+
 export interface PaginatedResult<T> {
   data: T[];
   meta: {
