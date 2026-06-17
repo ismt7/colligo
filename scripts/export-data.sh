@@ -206,8 +206,7 @@ if [[ "$EXPORT_FORMAT" == "custom" ]]; then
     --no-owner \
     --no-privileges \
     --compress=9 \
-    --verbose \
-    > "$OUTPUT_FILE" 2>&1 || {
+    > "$OUTPUT_FILE" || {
     log_error "pg_dump に失敗しました"
     exit 1
   }
@@ -220,8 +219,7 @@ else
     -d "$POSTGRES_DB" \
     --no-owner \
     --no-privileges \
-    --verbose \
-    > "$OUTPUT_FILE" 2>&1 || {
+    > "$OUTPUT_FILE" || {
     log_error "pg_dump に失敗しました"
     exit 1
   }
@@ -273,6 +271,14 @@ if [[ "$EXPORT_FORMAT" == "sql" ]]; then
   COPY_STMTS=$(grep -c "^COPY" "$OUTPUT_FILE" || true)
   if [[ $COPY_STMTS -gt 0 ]]; then
     log "  COPY ステートメント: $COPY_STMTS"
+  fi
+
+  # データ行が 0 の場合、空ダンプの可能性が高い
+  if [[ $INSERT_STMTS -eq 0 && $COPY_STMTS -eq 0 ]]; then
+    log ""
+    log_error "データ行（INSERT/COPY）が見つかりません。空ダンプの可能性があります。"
+    log_error "エクスポート元 DB が空でないか確認してください。"
+    exit 1
   fi
 fi
 

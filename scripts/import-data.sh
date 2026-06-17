@@ -126,6 +126,11 @@ if [[ ! -f "$INPUT_FILE" ]]; then
   exit 1
 fi
 
+if [[ ! -s "$INPUT_FILE" ]]; then
+  log_error "ダンプファイルが空です: $INPUT_FILE"
+  exit 1
+fi
+
 # ファイルサイズをチェック
 FILE_SIZE=$(stat -f%z "$INPUT_FILE" 2>/dev/null || stat -c%s "$INPUT_FILE" 2>/dev/null)
 if [[ $FILE_SIZE -lt 1024 ]]; then
@@ -327,13 +332,13 @@ log "データ件数:"
 FEED_COUNT=$(docker exec "$DB_CONTAINER" \
   psql -U "$POSTGRES_USER" \
   -d "$POSTGRES_DB" \
-  -t -c "SELECT COUNT(*) FROM feeds;")
+  -t -c "SELECT COUNT(*) FROM feeds;" | tr -d ' ')
 log "  Feeds: $FEED_COUNT"
 
 ARTICLE_COUNT=$(docker exec "$DB_CONTAINER" \
   psql -U "$POSTGRES_USER" \
   -d "$POSTGRES_DB" \
-  -t -c "SELECT COUNT(*) FROM articles;")
+  -t -c "SELECT COUNT(*) FROM articles;" | tr -d ' ')
 log "  Articles: $ARTICLE_COUNT"
 
 # 整合性チェック
@@ -344,7 +349,7 @@ log "整合性チェック:"
 DUPLICATE_URLS=$(docker exec "$DB_CONTAINER" \
   psql -U "$POSTGRES_USER" \
   -d "$POSTGRES_DB" \
-  -t -c "SELECT COUNT(*) FROM articles GROUP BY url HAVING COUNT(*) > 1;" | wc -l)
+  -t -c "SELECT COUNT(*) FROM (SELECT url FROM articles GROUP BY url HAVING COUNT(*) > 1) t;" | tr -d ' ')
 
 if [[ $DUPLICATE_URLS -eq 0 ]]; then
   log_success "  URL ユニーク制約: OK"
